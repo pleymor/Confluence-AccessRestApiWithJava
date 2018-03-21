@@ -1,3 +1,9 @@
+import com.vladsch.flexmark.ast.Node;
+import com.vladsch.flexmark.ext.gfm.strikethrough.StrikethroughExtension;
+import com.vladsch.flexmark.ext.tables.TablesExtension;
+import com.vladsch.flexmark.html.HtmlRenderer;
+import com.vladsch.flexmark.parser.Parser;
+import com.vladsch.flexmark.util.options.MutableDataSet;
 import org.apache.commons.io.IOUtils;
 import org.apache.http.HttpEntity;
 import org.apache.http.HttpResponse;
@@ -11,8 +17,14 @@ import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
+import java.io.IOException;
 import java.io.UnsupportedEncodingException;
 import java.net.URLEncoder;
+import java.nio.file.DirectoryStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.Arrays;
 
 /**
  * Creates a Confluence wiki page via the RESTul API
@@ -20,46 +32,56 @@ import java.net.URLEncoder;
  */
 public class ConfluenceRestApi2CreateEntry {
 
-    //private static final String BASE_URL = "http://localhost:1990/confluence";
-    private static final String BASE_URL = "https://<context>.atlassian.net/wiki";
-    private static final String USERNAME = "username";
-    private static final String PASSWORD = "password";
-    private static final String ENCODING = "utf-8";
+    private static final String BASE_URL = "https://my.confluence.com";
+    private static final String USERNAME = "my confluence user name";
+    private static final String SPACE_KEY = "My space KEY";
+    // This is the Page ID that can be found if you go to the "Page Information" section within Confluence
+    private static final int PARENT_ID = 12345;
 
-    public static String createContentRestUrl()throws UnsupportedEncodingException
-    {
+    private static final String PASSWORD = "my confluence pwd";
+    private static final String ENCODING = "utf-8";
+    private static final Path WIKI_ROOT = Paths.get("C:\\my\\local\\giltab-project.wiki");
+
+    private static String createContentRestUrl() throws UnsupportedEncodingException {
         return String.format("%s/rest/api/content/?&os_authType=basic&os_username=%s&os_password=%s", BASE_URL, URLEncoder.encode(USERNAME, ENCODING), URLEncoder.encode(PASSWORD, ENCODING));
 
     }
 
-    public static void main(final String[] args) throws Exception
-    {
-        String wikiPageTitle = "My Awesome Page";
-        String wikiPage = "<h1>Things That Are Awesome</h1><ul><li>Birds</li><li>Mammals</li><li>Decapods</li></ul>";
-        String wikiSpace = "JOUR";
-        String labelToAdd = "awesome_stuff";
-        int parentPageId = 9994250;
+    public static void main(final String[] args) throws Exception {
 
-
-        JSONObject newPage = defineConfluencePage(wikiPageTitle,
-                wikiPage,
-                wikiSpace,
-                labelToAdd,
-                parentPageId);
-
-        createConfluencePageViaPost(newPage);
-
+        int subRoot = createConfluencePageViaPost(defineConfluencePage("gitlab-wiki",
+                "",
+                SPACE_KEY,
+                "redacted with love",
+                PARENT_ID));
+        recursiveRead(WIKI_ROOT, subRoot);
     }
 
-    public static void createConfluencePageViaPost(JSONObject newPage) throws Exception
-    {
+    private static void recursiveRead(Path dir, int parentId) throws Exception {
+        int newDirId;
+        try (DirectoryStream<Path> stream = Files.newDirectoryStream(dir)) {
+            for (Path entry : stream) {
+                if (entry.toFile().isDirectory() && !entry.getFileName().toString().startsWith(".")) {
+                    System.out.println();
+                    System.out.println(entry.getFileName().toString() + "/ under " + parentId);
+                    newDirId = createConfluencePageViaPost(defineConfluencePage(entry.getFileName().toString(), "", SPACE_KEY, "redacted with love", parentId));
+                    recursiveRead(entry, newDirId);
+                } else if (entry.toString().endsWith(".md")) {
+
+                    System.out.println(entry.getFileName().toString() + " under " + parentId);
+                    createConfluencePageViaPost(defineConfluencePage(entry.getFileName().toString().replace(".md", ""), toHtml(entry), SPACE_KEY, "redacted with love", parentId));
+                } else System.out.println("ignored: " + entry.toString());
+            }
+        }
+    }
+
+    private static int createConfluencePageViaPost(JSONObject newPage) throws Exception {
         HttpClient client = new DefaultHttpClient();
 
         // Send update request
         HttpEntity pageEntity = null;
 
-        try
-        {
+        try {
             //2016-12-18 - StirlingCrow: Left off here.  Was finally able to get the post command to work
             //I can begin testing adding more data to the value stuff (see above)
             HttpPost postPageRequest = new HttpPost(createContentRestUrl());
@@ -72,20 +94,20 @@ public class ConfluenceRestApi2CreateEntry {
 
             System.out.println("Push Page Request returned " + postPageResponse.getStatusLine().toString());
             System.out.println("");
-            System.out.println(IOUtils.toString(pageEntity.getContent()));
-        }
-        finally
-        {
+            String responseString = IOUtils.toString(pageEntity.getContent());
+            System.out.println(responseString);
+            JSONObject jsonObject = new JSONObject(responseString);
+            return jsonObject.getInt("id");
+        } finally {
             EntityUtils.consume(pageEntity);
         }
     }
 
-    public static JSONObject defineConfluencePage(String pageTitle,
-                                                  String wikiEntryText,
-                                                  String pageSpace,
-                                                  String label,
-                                                  int parentPageId) throws JSONException
-    {
+    private static JSONObject defineConfluencePage(String pageTitle,
+                                                   String wikiEntryText,
+                                                   String pageSpace,
+                                                   String label,
+                                                   int parentPageId) throws JSONException {
         //This would be the command in Python (similar to the example
         //in the Confluence example:
         //
@@ -114,12 +136,12 @@ public class ConfluenceRestApi2CreateEntry {
 
         // "type":"page",
         // "title":"My Awesome Page"
-        newPage.put("type","page");
+        newPage.put("type", "page");
         newPage.put("title", pageTitle);
 
         // "ancestors":[{"id":9994246}],
         JSONObject parentPage = new JSONObject();
-        parentPage.put("id",parentPageId);
+        parentPage.put("id", parentPageId);
 
         JSONArray parentPageArray = new JSONArray();
         parentPageArray.put(parentPage);
@@ -128,7 +150,7 @@ public class ConfluenceRestApi2CreateEntry {
 
         // "space":{"key":"JOUR"},
         JSONObject spaceOb = new JSONObject();
-        spaceOb.put("key",pageSpace);
+        spaceOb.put("key", pageSpace);
         newPage.put("space", spaceOb);
 
         // "body":
@@ -139,7 +161,7 @@ public class ConfluenceRestApi2CreateEntry {
         JSONObject jsonObjects = new JSONObject();
 
         jsonObjects.put("value", wikiEntryText);
-        jsonObjects.put("representation","storage");
+        jsonObjects.put("representation", "storage");
 
         JSONObject storageObject = new JSONObject();
         storageObject.put("storage", jsonObjects);
@@ -157,11 +179,11 @@ public class ConfluenceRestApi2CreateEntry {
         //                       ]
         //             }
         JSONObject prefixJsonObject1 = new JSONObject();
-        prefixJsonObject1.put("prefix","global");
-        prefixJsonObject1.put("name","journal");
+        prefixJsonObject1.put("prefix", "global");
+        prefixJsonObject1.put("name", "journal");
         JSONObject prefixJsonObject2 = new JSONObject();
-        prefixJsonObject2.put("prefix","global");
-        prefixJsonObject2.put("name",label);
+        prefixJsonObject2.put("prefix", "global");
+        prefixJsonObject2.put("name", label);
 
         JSONArray prefixArray = new JSONArray();
         prefixArray.put(prefixJsonObject1);
@@ -170,8 +192,23 @@ public class ConfluenceRestApi2CreateEntry {
         JSONObject labelsObject = new JSONObject();
         labelsObject.put("labels", prefixArray);
 
-        newPage.put("metadata",labelsObject);
+        newPage.put("metadata", labelsObject);
 
         return newPage;
+    }
+
+    static String toHtml(Path mdPath) throws IOException {
+        String mdFile = new String(Files.readAllBytes(mdPath));
+
+        MutableDataSet options = new MutableDataSet();
+        options.set(HtmlRenderer.ESCAPE_INLINE_HTML, true);
+        options.set(Parser.EXTENSIONS, Arrays.asList(TablesExtension.create(), StrikethroughExtension.create()));
+        options.set(HtmlRenderer.SOFT_BREAK, "<br />\n");
+
+        Parser parser = Parser.builder(options).build();
+        HtmlRenderer renderer = HtmlRenderer.builder(options).build();
+
+        Node document = parser.parse(mdFile);
+        return renderer.render(document);
     }
 }
