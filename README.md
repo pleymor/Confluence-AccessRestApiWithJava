@@ -4,7 +4,7 @@ Upload a local markdown wiki to Confluence.
 
 Works for wikis such as gitlab wiki.
 
-##Prerequisite
+## Prerequisite
 
 For now, configure it directly by editing the attributes in the code:
 
